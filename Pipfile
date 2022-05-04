@@ -10,6 +10,7 @@ pytest-forked = "*"
 pytest-raises = "*"
 
 [packages]
+qtpy = "*"
 
 [dev-packages.qasync]
 editable = true
