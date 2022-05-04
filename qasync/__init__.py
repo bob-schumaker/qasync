@@ -13,6 +13,7 @@ __author__ = (
     "Gerard Marull-Paretas <gerard@teslabs.com>, "
     "Mark Harviston <mark.harviston@gmail.com>, "
     "Arve Knudsen <arve.knudsen@gmail.com>",
+    "Bob Schumaker <bob.schumaker@gmail.com>",
 )
 __version__ = "0.19.0"
 __url__ = "https://github.com/CabbageDevelopment/qasync"
@@ -22,7 +23,6 @@ __all__ = ["QEventLoop", "QThreadExecutor", "asyncSlot", "asyncClose"]
 import asyncio
 import contextlib
 import functools
-import importlib
 import itertools
 import logging
 import os
@@ -31,88 +31,16 @@ import time
 from concurrent.futures import Future
 from queue import Queue
 
+from qtpy.QtCore import QObject, QSocketNotifier, QThread, Slot
+from qtpy.QtWidgets import QApplication
+
+from ._common import _make_signaller, with_logger  # noqa
+
 logger = logging.getLogger(__name__)
-
-QtModule = None
-
-# If QT_API env variable is given, use that or fail trying
-qtapi_env = os.getenv("QT_API", "").strip().lower()
-if qtapi_env:
-    env_to_mod_map = {
-        "pyqt5": "PyQt5",
-        "pyqt6": "PyQt6",
-        "pyqt": "PyQt4",
-        "pyqt4": "PyQt4",
-        "pyside6": "PySide6",
-        "pyside2": "PySide2",
-        "pyside": "PySide",
-    }
-    if qtapi_env in env_to_mod_map:
-        QtModuleName = env_to_mod_map[qtapi_env]
-    else:
-        raise ImportError(
-            "QT_API environment variable set ({}) but not one of [{}].".format(
-                qtapi_env, ", ".join(env_to_mod_map.keys())
-            )
-        )
-
-    logger.info("Forcing use of {} as Qt Implementation".format(QtModuleName))
-    QtModule = importlib.import_module(QtModuleName)
-
-# If a Qt lib is already imported, use that
-if not QtModule:
-    for QtModuleName in ("PyQt5", "PyQt6", "PySide2", "PySide6"):
-        if QtModuleName in sys.modules:
-            QtModule = sys.modules[QtModuleName]
-            break
-
-# Try importing qt libs
-if not QtModule:
-    for QtModuleName in ("PyQt5", "PyQt6", "PySide2", "PySide6"):
-        try:
-            QtModule = importlib.import_module(QtModuleName)
-        except ImportError:
-            continue
-        else:
-            break
-
-if not QtModule:
-    raise ImportError("No Qt implementations found")
-
-logger.info("Using Qt Implementation: {}".format(QtModuleName))
-
-QtCore = importlib.import_module(QtModuleName + ".QtCore", package=QtModuleName)
-QtGui = importlib.import_module(QtModuleName + ".QtGui", package=QtModuleName)
-
-if QtModuleName == "PyQt5":
-    from PyQt5 import QtWidgets
-    from PyQt5.QtCore import pyqtSlot as Slot
-
-    QApplication = QtWidgets.QApplication
-
-elif QtModuleName == "PyQt6":
-    from PyQt6 import QtWidgets
-    from PyQt6.QtCore import pyqtSlot as Slot
-
-    QApplication = QtWidgets.QApplication
-
-elif QtModuleName == "PySide2":
-    from PySide2 import QtWidgets
-    from PySide2.QtCore import Slot
-
-    QApplication = QtWidgets.QApplication
-
-elif QtModuleName == "PySide6":
-    from PySide6 import QtWidgets
-    from PySide6.QtCore import Slot
-
-    QApplication = QtWidgets.QApplication
-
-from ._common import with_logger  # noqa
 
 
 @with_logger
-class _QThreadWorker(QtCore.QThread):
+class _QThreadWorker(QThread):
     """
     Read jobs from the queue and then execute them.
 
@@ -221,7 +149,7 @@ class QThreadExecutor:
         self.__been_shutdown = True
 
         self._logger.debug("Shutting down")
-        for i in range(len(self.__workers)):
+        for _ in range(len(self.__workers)):
             # Signal workers to stop
             self.__queue.put(None)
         if wait:
@@ -237,18 +165,8 @@ class QThreadExecutor:
         self.shutdown()
 
 
-def _make_signaller(qtimpl_qtcore, *args):
-    class Signaller(qtimpl_qtcore.QObject):
-        try:
-            signal = qtimpl_qtcore.Signal(*args)
-        except AttributeError:
-            signal = qtimpl_qtcore.pyqtSignal(*args)
-
-    return Signaller()
-
-
 @with_logger
-class _SimpleTimer(QtCore.QObject):
+class _SimpleTimer(QObject):
     def __init__(self):
         super().__init__()
         self.__callbacks = {}
@@ -342,7 +260,7 @@ class _QEventLoop:
         self._write_notifiers = {}
         self._timer = _SimpleTimer()
 
-        self.__call_soon_signaller = signaller = _make_signaller(QtCore, object, tuple)
+        self.__call_soon_signaller = signaller = _make_signaller(object, tuple)
         self.__call_soon_signal = signaller.signal
         signaller.signal.connect(lambda callback, args: self.call_soon(callback, *args))
 
@@ -502,7 +420,7 @@ class _QEventLoop:
             existing.activated["int"].disconnect()
             # will get overwritten by the assignment below anyways
 
-        notifier = QtCore.QSocketNotifier(_fileno(fd), QtCore.QSocketNotifier.Type.Read)
+        notifier = QSocketNotifier(_fileno(fd), QSocketNotifier.Type.Read)
         notifier.setEnabled(True)
         self.__log_debug("Adding reader callback for file descriptor %s", fd)
         notifier.activated["int"].connect(
@@ -539,7 +457,7 @@ class _QEventLoop:
             existing.activated["int"].disconnect()
             # will get overwritten by the assignment below anyways
 
-        notifier = QtCore.QSocketNotifier(fd, QtCore.QSocketNotifier.Type.Write)
+        notifier = QSocketNotifier(fd, QSocketNotifier.Type.Write)
         notifier.setEnabled(True)
         self.__log_debug("Adding writer callback for file descriptor %s", fd)
         notifier.activated["int"].connect(
